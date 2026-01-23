@@ -43,11 +43,12 @@ void printLocalTime() {
   M5.Lcd.print(dateStr);
 
   // --- 時刻の表示 ---
-  // HH:MM:SS の形式で文字列を生成
-  char timeStr[9];
-  strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+  // HH:MM の形式で文字列を生成
+  char timeStr[6];
+  strftime(timeStr, sizeof(timeStr), "%H:%M", &timeinfo);
 
-  M5.Lcd.setCursor(45, 100); // 少し上に移動
+  M5.Lcd.setCursor(85, 100); // センタリング (HH:MM 5文字 * font5(約30px) =
+                             // 150px, (320-150)/2 = 85)
   M5.Lcd.setTextSize(5);
   M5.Lcd.print(timeStr);
 
@@ -111,5 +112,5 @@ void setup() {
 void loop() {
   // 1秒ごとに時刻を更新して表示
   printLocalTime();
-  delay(1000);
+  delay(500);
 }
