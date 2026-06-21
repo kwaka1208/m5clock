@@ -1,8 +1,15 @@
+#include "Ambient.h"
 #include "M5UnitENV.h"
 #include "env.h" // Wi-FiのSSIDとパスワードをenv.hに分離
 #include "time.h"
 #include <M5Stack.h>
 #include <WiFi.h>
+
+WiFiClient client;
+Ambient ambient;
+bool isAmbientInitialized = false;
+unsigned long lastAmbientSendTime = 0;
+const unsigned long AMBIENT_SEND_INTERVAL_MS = 5 * 60 * 1000; // 5分
 
 // --- NTPサーバー設定 ---
 const char *ntpServer = "ntp.nict.jp";
@@ -27,7 +34,82 @@ const int BRIGHTNESS_HIGH = 100;
 const int BRIGHTNESS_LOW = 10;
 const unsigned long DIM_DELAY_MS = 5000;
 int currentBrightness = BRIGHTNESS_HIGH;
+
 unsigned long lastUpdateDisplayTime = 0;
+
+// Wi-Fi接続関数
+bool connectWifi() {
+  if (WiFi.status() == WL_CONNECTED)
+    return true;
+
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextColor(WHITE, BLACK);
+
+  for (int i = 0; i < wifiConfigCount; i++) {
+    M5.Lcd.setCursor(0, 10);
+    M5.Lcd.fillRect(0, 10, 320, 30, BLACK); // メッセージエリアクリア
+    M5.Lcd.printf("Connecting to %s ...", wifiConfigs[i].ssid);
+
+    WiFi.begin(wifiConfigs[i].ssid, wifiConfigs[i].password);
+
+    // 接続待ち (タイムアウト設定: 10秒程度)
+    int retryCount = 0;
+    while (WiFi.status() != WL_CONNECTED &&
+           retryCount < 20) { // 待ち時間を少し延長
+      delay(500);
+      M5.Lcd.print(".");
+      retryCount++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      M5.Lcd.println("\nWiFi connected.");
+      return true;
+    } else {
+      M5.Lcd.println("\nFailed.");
+    }
+  }
+  return false;
+}
+
+// Ambientへデータを送信する関数
+void sendAmbientData() {
+  bool wifiConnected = false;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi lost, reconnecting...");
+    wifiConnected = connectWifi();
+  } else {
+    wifiConnected = true;
+  }
+
+  if (wifiConnected) {
+    if (!isAmbientInitialized) {
+      Serial.println("Initializing Ambient...");
+      ambient.begin(ambientChannelId, ambientWriteKey, &client);
+      isAmbientInitialized = true;
+    }
+
+    sht30.update();
+    float temp = sht30.cTemp;
+    float hum = sht30.humidity;
+    float pressure = qmp6988.calcPressure() / 100.0f;
+
+    Serial.printf("Sending: Temp:%.1f, Hum:%.1f, Press:%.1f\n", temp, hum,
+                  pressure);
+
+    ambient.set(1, temp);
+    ambient.set(2, hum);
+    ambient.set(3, pressure);
+
+    bool sent = ambient.send();
+    if (sent) {
+      Serial.println("Ambient Sent OK");
+    } else {
+      Serial.println("Ambient Sent Failed");
+    }
+  } else {
+    Serial.println("WiFi Connection Failed, skipping send.");
+  }
+}
 
 // 時刻・センサー情報を画面に表示する関数
 void updateDisplay() {
@@ -101,6 +183,9 @@ void setup() {
   // M5Stackの初期化
   M5.begin();
   M5.Power.begin();
+  // SerialはM5.begin()で初期化されるが、念のため確認（デフォルト115200）
+  Serial.println("System Start");
+
   M5.Lcd.setBrightness(BRIGHTNESS_HIGH); // 画面の明るさを設定
   lastActivityTime = millis();
   M5.Lcd.fillScreen(BLACK); // 初回のみ画面をクリア
@@ -114,32 +199,7 @@ void setup() {
   }
 
   // Wi-Fi接続試行
-  bool connected = false;
-  M5.Lcd.setTextSize(2);
-
-  for (int i = 0; i < wifiConfigCount; i++) {
-    M5.Lcd.setCursor(0, 10);
-    M5.Lcd.fillRect(0, 10, 320, 30, BLACK); // メッセージエリアクリア
-    M5.Lcd.printf("Connecting to %s ...", wifiConfigs[i].ssid);
-
-    WiFi.begin(wifiConfigs[i].ssid, wifiConfigs[i].password);
-
-    // 接続待ち (タイムアウト設定: 10秒程度)
-    int retryCount = 0;
-    while (WiFi.status() != WL_CONNECTED && retryCount < 5) {
-      delay(500);
-      M5.Lcd.print(".");
-      retryCount++;
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      connected = true;
-      M5.Lcd.println("\nWiFi connected.");
-      break;
-    } else {
-      M5.Lcd.println("\nFailed.");
-    }
-  }
+  bool connected = connectWifi();
 
   if (connected) {
     // NTPサーバーから時刻を取得して設定
@@ -164,9 +224,21 @@ void setup() {
       // ここではそのまま進む（時刻はずれている可能性がある）
     }
 
-    // 時刻取得後はWi-FiをOFFにして省電力化
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    // Ambient初期化 (接続成功時のみ)
+    if (!isAmbientInitialized) {
+      ambient.begin(ambientChannelId, ambientWriteKey, &client);
+      isAmbientInitialized = true;
+    }
+
+    // 省電力化のための切断処理を削除 (常時接続)
+    // WiFi.disconnect(true);
+    // WiFi.mode(WIFI_OFF);
+
+    // 初回データ送信
+    Serial.println("Performing initial data send...");
+    sendAmbientData();
+    lastAmbientSendTime = millis();
+
   } else {
     isOffline = true;
     M5.Lcd.println("WiFi connection failed.");
@@ -197,6 +269,17 @@ void loop() {
       currentBrightness = BRIGHTNESS_LOW;
       M5.Lcd.setBrightness(currentBrightness);
     }
+  }
+
+  // Ambientへの送信 (5分ごと)
+  if (millis() - lastAmbientSendTime > AMBIENT_SEND_INTERVAL_MS) {
+    Serial.println("Periodic data send...");
+    sendAmbientData();
+
+    lastAmbientSendTime = millis();
+    // 画面再描画して接続メッセージ等を消す
+    M5.Lcd.fillScreen(BLACK);
+    updateDisplay();
   }
 
   // 1秒ごとに時刻を更新して表示 (非ブロッキング)

@@ -1,0 +1,26 @@
+root = true
+
+# 全てのファイルに対する基本設定（スペース2つ）
+[*]
+indent_style = space
+indent_size = 2
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+# 1行の最大文字数（必要に応じてコメントアウトを外してください）
+# max_line_length = 100
+
+# YAMLファイル
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# Makefileは文法上タブインデント必須
+[{Makefile,*.mk}]
+indent_style = tab
+indent_size = 4
+
+# Markdownファイル
+[*.md]
+trim_trailing_whitespace = false
